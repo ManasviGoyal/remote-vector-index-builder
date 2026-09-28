@@ -280,6 +280,21 @@ class S3ObjectStore(ObjectStore):
         except ClientError as e:
             raise BlobError(f"Error downloading file: {e}") from e
 
+    def get_blob_size(self, remote_store_path: str) -> int:
+        """
+        Returns the size in bytes of the S3 object at remote_store_path, via a HEAD request.
+
+        Raises:
+            BlobError: If the object metadata cannot be read
+        """
+        try:
+            head_obj_response = self.s3_client.head_object(
+                Bucket=self.bucket, Key=remote_store_path
+            )
+            return head_obj_response["ContentLength"]
+        except ClientError as e:
+            raise BlobError(f"Error reading blob size: {e}") from e
+
     def get_kms_key(self, remote_store_path: str) -> None:
         """
         Checks the S3 object metadata to see if there is a KMS key present for SSE-KMS. If there is a key present, then

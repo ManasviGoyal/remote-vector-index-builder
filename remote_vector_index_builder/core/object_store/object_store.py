@@ -41,6 +41,22 @@ class ObjectStore(ABC):
         pass
 
     @abstractmethod
+    def get_blob_size(self, remote_store_path: str) -> int:
+        """
+        Returns the size in bytes of the blob at remote_store_path, without downloading it
+
+        Args:
+            remote_store_path (str): The path/key to the remote object
+
+        Returns:
+            int: The size of the blob in bytes
+
+        Note:
+            - Implementations should handle any necessary authentication and error handling
+        """
+        pass
+
+    @abstractmethod
     def write_blob(self, data: Union[str, BytesIO], remote_store_path: str) -> None:
         """
         Uploads the blob at local_file_path to the remote_store_path

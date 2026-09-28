@@ -260,8 +260,29 @@ def build_index(
 
 
 def _determine_streaming_buffer(
-    index_build_params: IndexBuildParameters, vector_bytes_buffer
+    index_build_params: IndexBuildParameters, vector_bytes_buffer, vector_blob_size
 ):
+    """
+    Picks the buffer the vector blob is downloaded into.
+
+    Two k-NN cases arrive as data_type half_float:
+      - a half_float field: fp16 bytes (2 bytes per value), read directly into vector_bytes_buffer
+      - a float field with the fp16 scalar quantizer: raw fp32 bytes (4 bytes per value)
+    They are told apart by the blob size. The fp32 case is converted to fp16 while streaming so
+    the fp32 data never fully materializes in memory.
+
+    Args:
+        index_build_params: Build parameters (data_type, doc_count, dimension)
+        vector_bytes_buffer: The caller's buffer for the vector blob
+        vector_blob_size: Size in bytes of the vector blob in object storage
+
+    Returns:
+        The buffer to download the vector blob into
+
+    Raises:
+        VectorsDatasetError: If a half_float blob matches neither the fp16 nor the fp32 size
+    """
+    from remote_vector_index_builder.core.common.exceptions import VectorsDatasetError
     from remote_vector_index_builder.core.common.models.index_build_parameters import (
         DataType,
     )
@@ -270,9 +291,21 @@ def _determine_streaming_buffer(
     )
 
     if index_build_params.data_type == DataType.FLOAT16:
-        return FP32ToFP16ConvertingBytesIO(
-            index_build_params.doc_count * index_build_params.dimension
-        )
+        num_values = index_build_params.doc_count * index_build_params.dimension
+        fp16_size = num_values * DataType.FLOAT16.get_size()
+        fp32_size = num_values * DataType.FLOAT.get_size()
+        if vector_blob_size == fp32_size:
+            logger.info(
+                "half_float vector blob is fp32 encoded (float field with fp16 SQ encoder), "
+                "converting to fp16 while downloading"
+            )
+            return FP32ToFP16ConvertingBytesIO(num_values)
+        if vector_blob_size != fp16_size:
+            raise VectorsDatasetError(
+                f"half_float vector blob of {vector_blob_size} bytes matches neither "
+                f"fp16 ({fp16_size}) nor fp32 ({fp32_size}) for "
+                f"doc_count={index_build_params.doc_count}, dimension={index_build_params.dimension}"
+            )
 
     return vector_bytes_buffer
 
@@ -289,6 +322,8 @@ def create_vectors_dataset(
     This function performs the first step in the index building process by:
     1. Creating an appropriate object store instance
     2. Downloading vector data from the specified vector_path, into the vector_bytes_buffer
+       (for half_float, the blob size decides whether it is fp16 or fp32 data,
+       see _determine_streaming_buffer)
     3. Downloading document IDs from the specified doc_id_path, into the doc_id_bytes_buffer
     4. Combining them into a VectorsDataset object
 
@@ -323,8 +358,9 @@ def create_vectors_dataset(
         UnsupportedObjectStoreTypeError: If the index_build_params.repository_type is not supported
 
     """
+    vector_blob_size = object_store.get_blob_size(index_build_params.vector_path)
     vector_bytes_buffer = _determine_streaming_buffer(
-        index_build_params, vector_bytes_buffer
+        index_build_params, vector_bytes_buffer, vector_blob_size
     )
     object_store.read_blob(index_build_params.vector_path, vector_bytes_buffer)
     object_store.read_blob(index_build_params.doc_id_path, doc_id_bytes_buffer)

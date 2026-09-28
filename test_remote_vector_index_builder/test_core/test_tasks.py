@@ -14,11 +14,18 @@ import numpy as np
 import pytest
 from core.tasks import (
     TaskResult,
+    _determine_streaming_buffer,
     build_index,
     create_vectors_dataset,
     run_tasks,
     upload_index,
     index_storage_context,
+)
+
+# Imported via the same package path core.tasks uses, so isinstance / pytest.raises see the same class objects
+from remote_vector_index_builder.core.common.exceptions import VectorsDatasetError
+from remote_vector_index_builder.core.fp32_to_fp16_converting_bytes_io import (
+    FP32ToFP16ConvertingBytesIO,
 )
 from core.common.exceptions import BlobError
 from core.common.models.vectors_dataset import VectorsDataset
@@ -72,6 +79,74 @@ def test_download_blob_error_handling(
         create_vectors_dataset(
             index_build_parameters, mock_object_store, vectors, doc_ids
         )
+
+    vectors.close()
+    doc_ids.close()
+
+
+def _half_float_params(doc_count=5, dimension=4):
+    return Mock(
+        data_type=DataType.FLOAT16,
+        doc_count=doc_count,
+        dimension=dimension,
+        vector_path="test/vectors.knnvec",
+        doc_id_path="test/vectors.knndid",
+    )
+
+
+def test_streaming_buffer_half_float_fp16_blob_is_read_directly():
+    params = _half_float_params()
+    vectors = BytesIO()
+    fp16_blob_size = params.doc_count * params.dimension * DataType.FLOAT16.get_size()
+
+    assert _determine_streaming_buffer(params, vectors, fp16_blob_size) is vectors
+
+
+def test_streaming_buffer_half_float_fp32_blob_is_converted():
+    params = _half_float_params()
+    vectors = BytesIO()
+    fp32_blob_size = params.doc_count * params.dimension * DataType.FLOAT.get_size()
+
+    buffer = _determine_streaming_buffer(params, vectors, fp32_blob_size)
+
+    assert isinstance(buffer, FP32ToFP16ConvertingBytesIO)
+    assert buffer is not vectors
+
+
+def test_streaming_buffer_half_float_unexpected_blob_size_raises():
+    params = _half_float_params()
+    vectors = BytesIO()
+    fp16_size = params.doc_count * params.dimension * DataType.FLOAT16.get_size()
+
+    with pytest.raises(VectorsDatasetError, match="matches neither fp16"):
+        _determine_streaming_buffer(params, vectors, fp16_size - 1)
+
+
+def test_streaming_buffer_non_half_float_is_unchanged(index_build_parameters):
+    vectors = BytesIO()
+    assert index_build_parameters.data_type != DataType.FLOAT16
+    assert (
+        _determine_streaming_buffer(index_build_parameters, vectors, 12345) is vectors
+    )
+
+
+def test_create_vectors_dataset_uses_blob_size_for_half_float(
+    mock_object_store, mock_vectors_dataset_parse
+):
+    params = _half_float_params()
+    mock_object_store.get_blob_size.return_value = (
+        params.doc_count * params.dimension * DataType.FLOAT16.get_size()
+    )
+    mock_vectors_dataset_parse.return_value = Mock(spec=VectorsDataset)
+    vectors = BytesIO()
+    doc_ids = BytesIO()
+
+    create_vectors_dataset(params, mock_object_store, vectors, doc_ids)
+
+    mock_object_store.get_blob_size.assert_called_once_with(params.vector_path)
+    # fp16 blob: downloaded straight into the caller's buffer, no converting wrapper
+    vector_read_call = mock_object_store.read_blob.call_args_list[0]
+    assert vector_read_call.args == (params.vector_path, vectors)
 
     vectors.close()
     doc_ids.close()
