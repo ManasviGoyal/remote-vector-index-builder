@@ -32,6 +32,33 @@ datasets:
       std: 0.1
       normalize: true
 
+  # half_float field: uploaded as fp16 (2 bytes/value), read directly by the service
+  test-dataset-half-float-fp16:
+    dimension: 128
+    num_vectors: 100_000
+    num_queries: 1_000
+    data_type: float16
+    request_data_type: half_float
+    distribution:
+      type: normal
+      mean: 0.0
+      std: 1.0
+      normalize: true
+
+  # float field with the fp16 scalar quantizer: uploaded as fp32 under data_type half_float,
+  # converted to fp16 by the service
+  test-dataset-half-float-fp32:
+    dimension: 128
+    num_vectors: 100_000
+    num_queries: 1_000
+    data_type: float32
+    request_data_type: half_float
+    distribution:
+      type: normal
+      mean: 0.0
+      std: 1.0
+      normalize: true
+
 generation:
   batch_size: 100_000
   seed: 42

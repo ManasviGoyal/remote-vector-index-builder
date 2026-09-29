@@ -257,19 +257,18 @@ def test_get_blob_size_success(index_build_parameters, object_store_config):
         )
 
 
-def test_get_blob_size_client_error_failure(
+def test_get_blob_size_client_error_returns_none(
     index_build_parameters, object_store_config
 ):
     with patch("core.object_store.s3.s3_object_store.get_boto3_client"):
         store = S3ObjectStore(index_build_parameters, object_store_config)
         store.s3_client.head_object = Mock(
             side_effect=ClientError(
-                {"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject"
+                {"Error": {"Code": "403", "Message": "Forbidden"}}, "HeadObject"
             )
         )
 
-        with pytest.raises(BlobError):
-            store.get_blob_size("test/path")
+        assert store.get_blob_size("test/path") is None
 
 
 def test_read_blob_with_debug(

@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 from core.tasks import (
     TaskResult,
+    _convert_half_float_blob_if_fp32,
     _determine_streaming_buffer,
     build_index,
     create_vectors_dataset,
@@ -120,6 +121,68 @@ def test_streaming_buffer_half_float_unexpected_blob_size_raises():
 
     with pytest.raises(VectorsDatasetError, match="matches neither fp16"):
         _determine_streaming_buffer(params, vectors, fp16_size - 1)
+
+
+def test_streaming_buffer_half_float_unknown_size_defers_to_download():
+    params = _half_float_params()
+    vectors = BytesIO()
+    assert _determine_streaming_buffer(params, vectors, None) is vectors
+
+
+def _fp16_and_fp32_blobs(params):
+    rng = np.random.default_rng(0)
+    truth = rng.standard_normal((params.doc_count, params.dimension)).astype(np.float32)
+    return truth.astype(np.float16), truth.astype(np.float16).tobytes(), truth.tobytes()
+
+
+def test_convert_half_float_blob_when_fp32_converts_in_place():
+    params = _half_float_params()
+    expected, _, fp32_blob = _fp16_and_fp32_blobs(params)
+    vectors = BytesIO(fp32_blob)
+
+    _convert_half_float_blob_if_fp32(params, vectors)
+
+    got = np.frombuffer(vectors.getvalue(), dtype="<f2").reshape(
+        params.doc_count, params.dimension
+    )
+    assert np.array_equal(got, expected)
+
+
+def test_convert_half_float_blob_when_fp16_is_untouched():
+    params = _half_float_params()
+    _, fp16_blob, _ = _fp16_and_fp32_blobs(params)
+    vectors = BytesIO(fp16_blob)
+
+    _convert_half_float_blob_if_fp32(params, vectors)
+
+    assert vectors.getvalue() == fp16_blob
+
+
+def test_convert_half_float_blob_unexpected_size_raises():
+    params = _half_float_params()
+    _, fp16_blob, _ = _fp16_and_fp32_blobs(params)
+    vectors = BytesIO(fp16_blob[:-1])
+
+    with pytest.raises(VectorsDatasetError, match="matches neither fp16"):
+        _convert_half_float_blob_if_fp32(params, vectors)
+
+
+def test_create_vectors_dataset_half_float_unknown_size_fp32_blob_still_builds(
+    mock_object_store,
+):
+    # HEAD not permitted: size lookup returns None, blob is fp32 -> converted after download
+    params = _half_float_params()
+    expected, _, fp32_blob = _fp16_and_fp32_blobs(params)
+    doc_ids = np.arange(params.doc_count, dtype=np.int32)
+    blobs = {params.vector_path: fp32_blob, params.doc_id_path: doc_ids.tobytes()}
+    mock_object_store.get_blob_size.return_value = None
+    mock_object_store.read_blob.side_effect = lambda path, buf: buf.write(blobs[path])
+
+    dataset = create_vectors_dataset(params, mock_object_store, BytesIO(), BytesIO())
+
+    assert dataset.dtype == DataType.FLOAT16
+    assert np.array_equal(dataset.vectors, expected)
+    assert np.array_equal(dataset.doc_ids, doc_ids)
 
 
 def test_streaming_buffer_non_half_float_is_unchanged(index_build_parameters):

@@ -49,7 +49,10 @@ def run_e2e_index_builder(config_path: str = "e2e/api/test-datasets.yml"):
                 "container_name": bucket,
                 "dimension": dataset_config["dimension"],
                 "doc_count": dataset_config["num_vectors"],
-                "data_type": DataType.FLOAT,
+                # request data type defaults to float; half_float datasets set it explicitly
+                "data_type": DataType(
+                    dataset_config.get("request_data_type", DataType.FLOAT.value)
+                ),
                 "repository_type": ObjectStoreType.S3,
                 "engine": Engine.FAISS,
             }

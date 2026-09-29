@@ -6,7 +6,7 @@
 # compatible open source license.
 
 from abc import ABC, abstractmethod
-from typing import Union
+from typing import Optional, Union
 from io import BytesIO
 
 
@@ -41,7 +41,7 @@ class ObjectStore(ABC):
         pass
 
     @abstractmethod
-    def get_blob_size(self, remote_store_path: str) -> int:
+    def get_blob_size(self, remote_store_path: str) -> Optional[int]:
         """
         Returns the size in bytes of the blob at remote_store_path, without downloading it
 
@@ -49,7 +49,9 @@ class ObjectStore(ABC):
             remote_store_path (str): The path/key to the remote object
 
         Returns:
-            int: The size of the blob in bytes
+            Optional[int]: The size of the blob in bytes, or None if it cannot be determined
+                (for example, missing permission for a metadata request). Callers must not fail
+                the build on None; the download itself still reports real errors.
 
         Note:
             - Implementations should handle any necessary authentication and error handling

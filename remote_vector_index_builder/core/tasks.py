@@ -37,12 +37,15 @@ import os
 import tempfile
 from dataclasses import dataclass
 from io import BytesIO
+
+import numpy as np
 from timeit import default_timer as timer
 import traceback
 from typing import Any, Dict, Optional, Union
 from contextlib import contextmanager
 
 
+from core.common.models.index_build_parameters import DataType
 from core.common.models import (
     IndexBuildParameters,
     IndexSerializationMode,
@@ -260,7 +263,9 @@ def build_index(
 
 
 def _determine_streaming_buffer(
-    index_build_params: IndexBuildParameters, vector_bytes_buffer, vector_blob_size
+    index_build_params: IndexBuildParameters,
+    vector_bytes_buffer,
+    vector_blob_size: Optional[int],
 ):
     """
     Picks the buffer the vector blob is downloaded into.
@@ -269,7 +274,8 @@ def _determine_streaming_buffer(
       - a half_float field: fp16 bytes (2 bytes per value), read directly into vector_bytes_buffer
       - a float field with the fp16 scalar quantizer: raw fp32 bytes (4 bytes per value)
     They are told apart by the blob size. The fp32 case is converted to fp16 while streaming so
-    the fp32 data never fully materializes in memory.
+    the fp32 data never fully materializes in memory. If the size is unknown (None), the blob is
+    downloaded as-is and _convert_half_float_blob_if_fp32 decides afterwards.
 
     Args:
         index_build_params: Build parameters (data_type, doc_count, dimension)
@@ -291,6 +297,8 @@ def _determine_streaming_buffer(
     )
 
     if index_build_params.data_type == DataType.FLOAT16:
+        if vector_blob_size is None:
+            return vector_bytes_buffer
         num_values = index_build_params.doc_count * index_build_params.dimension
         fp16_size = num_values * DataType.FLOAT16.get_size()
         fp32_size = num_values * DataType.FLOAT.get_size()
@@ -308,6 +316,47 @@ def _determine_streaming_buffer(
             )
 
     return vector_bytes_buffer
+
+
+def _convert_half_float_blob_if_fp32(
+    index_build_params: IndexBuildParameters, vector_bytes_buffer: BytesIO
+) -> None:
+    """
+    Fallback for a half_float blob whose size was not known before download: inspect the downloaded
+    length and, if it is fp32, convert it to fp16 in place. Unlike the streaming path this holds the
+    full fp32 blob in memory during conversion, so it is only used when the size lookup failed.
+
+    Raises:
+        VectorsDatasetError: If the blob matches neither the fp16 nor the fp32 size
+    """
+    from remote_vector_index_builder.core.common.exceptions import VectorsDatasetError
+    from remote_vector_index_builder.core.common.models.index_build_parameters import (
+        DataType,
+    )
+
+    num_values = index_build_params.doc_count * index_build_params.dimension
+    fp16_size = num_values * DataType.FLOAT16.get_size()
+    fp32_size = num_values * DataType.FLOAT.get_size()
+    with vector_bytes_buffer.getbuffer() as view:
+        actual_size = len(view)
+        if actual_size == fp32_size:
+            logger.info(
+                "half_float vector blob is fp32 encoded (float field with fp16 SQ encoder), "
+                "converting to fp16 in memory"
+            )
+            fp16_values = np.frombuffer(view, dtype="<f4").astype("<f2")
+        elif actual_size == fp16_size:
+            return
+        else:
+            raise VectorsDatasetError(
+                f"half_float vector blob of {actual_size} bytes matches neither "
+                f"fp16 ({fp16_size}) nor fp32 ({fp32_size}) for "
+                f"doc_count={index_build_params.doc_count}, dimension={index_build_params.dimension}"
+            )
+    vector_bytes_buffer.seek(0)
+    vector_bytes_buffer.truncate(0)
+    vector_bytes_buffer.write(fp16_values.tobytes())
+    vector_bytes_buffer.seek(0)
 
 
 def create_vectors_dataset(
@@ -363,6 +412,8 @@ def create_vectors_dataset(
         index_build_params, vector_bytes_buffer, vector_blob_size
     )
     object_store.read_blob(index_build_params.vector_path, vector_bytes_buffer)
+    if vector_blob_size is None and index_build_params.data_type == DataType.FLOAT16:
+        _convert_half_float_blob_if_fp32(index_build_params, vector_bytes_buffer)
     object_store.read_blob(index_build_params.doc_id_path, doc_id_bytes_buffer)
 
     return VectorsDataset.parse(
