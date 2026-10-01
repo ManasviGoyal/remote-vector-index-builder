@@ -413,6 +413,10 @@ def create_vectors_dataset(
     )
     object_store.read_blob(index_build_params.vector_path, vector_bytes_buffer)
     if vector_blob_size is None and index_build_params.data_type == DataType.FLOAT16:
+        logger.error(
+            f"Vector blob size not found for {index_build_params.vector_path}, falling back to "
+            "detecting the half_float layout from the downloaded blob"
+        )
         _convert_half_float_blob_if_fp32(index_build_params, vector_bytes_buffer)
     object_store.read_blob(index_build_params.doc_id_path, doc_id_bytes_buffer)
 
