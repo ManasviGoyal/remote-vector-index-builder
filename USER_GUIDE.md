@@ -29,7 +29,7 @@ If another Docker process is already running on this port, you may get an error 
 
 After successfully running the previous command, the remote build service will be available at the instance's public IP address on port 80 (or whichever port was chosen previously).
 
-For information on configuring OpenSearch to use this service, please refer to the [OpenSearch k-NN documentation.](https://docs.opensearch.org/docs/latest/vector-search/)
+For information on configuring OpenSearch to use this service, please refer to the [OpenSearch k-NN documentation.](https://docs.opensearch.org/latest/vector-search/)
 
 ## Additional Information
 
