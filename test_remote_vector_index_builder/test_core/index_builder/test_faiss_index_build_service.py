@@ -139,7 +139,6 @@ class TestFaissIndexBuildService:
                 index_build_parameters.doc_count,
                 n_lists,
                 IVFPQSearchCagraConfig.n_probes,
-                service._vector_data_bytes(index_build_parameters),
             )
             return {
                 "ivf_pq_params": {

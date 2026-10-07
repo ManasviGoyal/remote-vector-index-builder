@@ -53,8 +53,8 @@ class FaissIndexBuildService(IndexBuildService):
         self, index_build_parameters: IndexBuildParameters, n_lists: int
     ) -> int:
         """
-        The m to build the CAGRA graph with: the requested m, lowered for small datasets that
-        cannot supply m * GRAPH_DEGREE_PER_M neighbors per vector (see calculate_effective_m).
+        The m to build the CAGRA graph with: the requested m, lowered when the dataset cannot
+        supply m * GRAPH_DEGREE_PER_M neighbors per vector (see calculate_effective_m).
         """
         requested_m = index_build_parameters.index_parameters.algorithm_parameters.m
         effective_m = calculate_effective_m(
@@ -62,7 +62,6 @@ class FaissIndexBuildService(IndexBuildService):
             index_build_parameters.doc_count,
             n_lists,
             IVFPQSearchCagraConfig.n_probes,
-            self._vector_data_bytes(index_build_parameters),
         )
         if effective_m != requested_m:
             logger.info(
@@ -71,26 +70,6 @@ class FaissIndexBuildService(IndexBuildService):
                 f"{index_build_parameters.doc_count} is too small for the requested graph degree"
             )
         return effective_m
-
-    @staticmethod
-    def _vector_data_bytes(index_build_parameters: IndexBuildParameters) -> int:
-        """
-        Size of the vector data as the client sized it for its remote build threshold.
-        half_float is counted at 4 bytes per value: k-NN sends data_type half_float both for
-        fp16 blobs and for fp32 blobs (float field with the fp16 SQ encoder), and using the larger
-        size means a dataset is never treated as smaller than the client considered it.
-        """
-        data_type = index_build_parameters.data_type
-        bytes_per_value = (
-            DataType.FLOAT.get_size()
-            if data_type == DataType.FLOAT16
-            else data_type.get_size()
-        )
-        return (
-            index_build_parameters.doc_count
-            * index_build_parameters.dimension
-            * bytes_per_value
-        )
 
     def build_index(
         self,
